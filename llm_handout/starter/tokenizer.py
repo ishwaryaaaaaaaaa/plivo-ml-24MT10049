@@ -15,6 +15,7 @@ load() with no arguments returns whichever tokenizer this submission uses
 byte fallback). merges are loaded relative to __file__ so grading (cwd =
 submission folder) works with no internet and no extra args.
 """
+import heapq
 import json
 import os
 
@@ -50,27 +51,60 @@ class BPETokenizer:
         self.vocab_size = 256 + len(merges)
 
     def _bpe_ids(self, ids):
+        # O(n log n) merge via a doubly linked list + min-heap of candidate
+        # pairs keyed by merge rank (lower rank = learned earlier = applied
+        # first) -- equivalent result to the naive "rescan whole sequence
+        # per merge" approach, but the naive one is O(n * num_merges) and is
+        # far too slow on a multi-megabyte corpus.
+        n = len(ids)
+        if n < 2:
+            return list(ids)
         ids = list(ids)
-        while len(ids) >= 2:
-            pairs = set(zip(ids, ids[1:]))
-            candidates = [p for p in pairs if p in self.merge_ranks]
-            if not candidates:
-                break
-            pair = min(candidates, key=lambda p: self.merge_ranks[p])
-            new_id = self.pair_to_id[pair]
-            out = []
-            i = 0
-            n = len(ids)
-            a, b = pair
-            while i < n:
-                if i < n - 1 and ids[i] == a and ids[i + 1] == b:
-                    out.append(new_id)
-                    i += 2
-                else:
-                    out.append(ids[i])
-                    i += 1
-            ids = out
-        return ids
+        rank = self.merge_ranks
+        pair_to_id = self.pair_to_id
+        prev = list(range(-1, n - 1))
+        nxt = list(range(1, n + 1))          # nxt[n-1] == n (sentinel: no node)
+        alive = [True] * n
+        heap = []
+        for i in range(n - 1):
+            p = (ids[i], ids[i + 1])
+            r = rank.get(p)
+            if r is not None:
+                heap.append((r, i))
+        heapq.heapify(heap)
+        while heap:
+            r, i = heapq.heappop(heap)
+            if not alive[i]:
+                continue
+            j = nxt[i]
+            if j >= n or not alive[j]:
+                continue
+            pair = (ids[i], ids[j])
+            if rank.get(pair) != r:
+                continue  # stale: one side changed since this entry was pushed
+            ids[i] = pair_to_id[pair]
+            alive[j] = False
+            nj = nxt[j]
+            nxt[i] = nj
+            if nj < n:
+                prev[nj] = i
+            pi = prev[i]
+            if pi != -1:
+                newp = (ids[pi], ids[i])
+                nr = rank.get(newp)
+                if nr is not None:
+                    heapq.heappush(heap, (nr, pi))
+            if nj < n:
+                newp = (ids[i], ids[nj])
+                nr = rank.get(newp)
+                if nr is not None:
+                    heapq.heappush(heap, (nr, i))
+        out = []
+        i = 0
+        while i < n:
+            out.append(ids[i])
+            i = nxt[i]
+        return out
 
     def encode(self, text):
         byte_ids = list(text.encode("utf-8"))
