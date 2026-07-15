@@ -45,3 +45,27 @@ the absolute numbers (which are worse than a full run would give).
   5. **Decision:** carry forward BPE tokenizer + full recipe fix + RoPE as the base config for round 2 (block_size / batch / lr sweeps) and the final run.
 
 ---
+
+## Runs 6–12 — second ablation round (block_size / batch / lr sweeps, 500 steps each)
+
+Base config for all of these = run 5's winner (BPE, new recipe, RoPE, block_size=256, batch=24, lr=3e-3), varying one knob at a time, then testing the best two knobs combined.
+
+| # | name | block_size | batch | lr | dev bpb | Δ vs base (1.8770) |
+|---|------|-----------|-------|-----|---------|---------------------|
+| 6 | bpe_block192 | 192 | 24 | 3e-3 | 1.9301 | worse |
+| 7 | bpe_block320 | 320 | 24 | 3e-3 | 1.8539 | better |
+| 8 | bpe_batch12 | 256 | 12 | 3e-3 | 2.2693 | much worse |
+| 9 | bpe_batch32 | 256 | 32 | 3e-3 | 1.8343 | better |
+| 10 | bpe_lr_low | 256 | 24 | 1.5e-3 | 1.9260 | worse |
+| 11 | bpe_lr_high | 256 | 24 | 6e-3 | 2.1349 | much worse |
+| 12 | bpe_block320_batch32 | **320** | **32** | 3e-3 | **1.8124** | **best** |
+
+- **Hypothesis:** since only *optimizer steps* are capped (not compute/tokens), increasing tokens-per-step (via block_size or batch) should let the model see more data within the same 2000-step budget and improve bpb; lr=3e-3 (chosen as a reasonable default) might not be optimal.
+- **Result / conclusion:**
+  1. **block_size and batch both trade monotonically in the tested range**: 192→256→320 improves bpb (1.9301→1.8770→1.8539); 12→24→32 improves bpb even more sharply (2.2693→1.8770→1.8343). Smaller batch (12) hurts badly — noisier gradient estimates and fewer total tokens seen under a fixed 2000-step cap cost more than they save in wall-clock.
+  2. **lr=3e-3 was already close to a local optimum**: both 1.5e-3 (undertrained-looking, higher bpb) and 6e-3 (unstable/overshooting, higher bpb) are worse. No further lr tuning done — diminishing returns for the time spent.
+  3. **Combining the two winning knobs (block_size=320, batch=32) is close to additive**: base 1.8770, block-only Δ=-0.0231, batch-only Δ=-0.0427, sum≈-0.0658; observed combined Δ=-0.0646 (1.8124). This confirms they're capturing largely independent sources of improvement (more real context per prediction vs. less noisy gradients / more tokens per step), not double-counting the same effect.
+  4. **Cost tradeoff:** block_size=320/batch=32 costs ~866ms/step (vs. 83ms/step for the original baseline shape) — about 10x slower per step, but since only *steps* are capped, not wall-clock, this is a legitimate way to spend the budget. A full 2000-step run at this config was estimated at ~29 minutes, judged acceptable for a one-time final run (no wall-clock cap in the hard caps list).
+  5. **Decision:** lock in BPE tokenizer + full recipe (warmup+cosine, AdamW wd=0.1, clip=1.0, tied, GPT-2 init) + RoPE + block_size=320 + batch=32 + lr=3e-3 as the final configuration, and run it for the full 2000-step budget.
+
+---
