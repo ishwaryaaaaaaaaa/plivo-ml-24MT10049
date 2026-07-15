@@ -69,3 +69,12 @@ Base config for all of these = run 5's winner (BPE, new recipe, RoPE, block_size
   5. **Decision:** lock in BPE tokenizer + full recipe (warmup+cosine, AdamW wd=0.1, clip=1.0, tied, GPT-2 init) + RoPE + block_size=320 + batch=32 + lr=3e-3 as the final configuration, and run it for the full 2000-step budget.
 
 ---
+
+## Run 13 — FINAL submission run (full 2000-step budget)
+
+- **Hypothesis:** the locked-in config from runs 1–12 should beat the 500-step proxy scores (1.81) once given the full 2000-step budget and the cosine schedule's full decay.
+- **Config:** BPE tokenizer (vocab 2048, `bpe_merges.json`, trained on a 2MB sample of `train_corpus.txt`), n_embd=176, n_layer=4, n_head=4, block_size=320, RoPE position encoding, tie_weights=True, GPT-2-style init (std=0.02, residual projections scaled by 1/sqrt(2·n_layer)), AdamW (wd=0.1 on 2D+ params only, betas=(0.9, 0.95)), linear warmup (100 steps) + cosine decay from lr=3e-3 to min_lr=3e-4, grad-norm clipping at 1.0, batch=32, steps=2000.
+- **Result:** train loss 7.66 → 2.885 over 2000 steps (885 ms/step, 1771s ≈ 29.5 min total — the model.py/train.py hard caps are on *steps* and *params*, not wall-clock, so this one-time final run being ~10x slower per step than the original 83 ms/step baseline is an intentional trade of wall-clock for tokens-per-step, not an oversight). n_params = **1,856,800** (under the 2,000,000 cap). Checkpoint stores `steps: 2000`.
+  - **`dev bpb = 1.6699`** (down from the unmodified baseline's 2.3718 — a **29.6% relative reduction**).
+  - Note: the raw train cross-entropy loss (2.885) looks numerically *worse* than the baseline's final loss (1.73) — this is expected and not a regression: baseline loss is nats-per-*byte*-token (vocab 256), this run's loss is nats-per-*BPE-token* (vocab 2048, ~3.4 bytes/token), so the two losses aren't on the same scale. bpb is the only fair comparison, which is exactly why `evaluate.py` reports bits-per-*byte* rather than per-token loss.
+- **Conclusion:** every one of the five factors changed from the baseline (tokenizer, LR schedule, weight decay + grad clipping, weight tying + init, RoPE, and pushing block_size/batch as far as the step-only cap allows) contributed a measurable, mostly-independent improvement; none of them individually or in combination violated the hard caps (≤2000 steps, ≤2,000,000 params, corpus-only data, pure PyTorch/numpy/stdlib, CPU-only). This is the submitted `ckpt.pt`.
